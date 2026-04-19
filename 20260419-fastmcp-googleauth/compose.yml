@@ -1,0 +1,4 @@
+services:
+  testmcp:
+    build: .
+    image: gcr.io/nnyn-dev/testmcp:latest
