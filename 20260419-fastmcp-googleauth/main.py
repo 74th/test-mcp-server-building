@@ -12,7 +12,7 @@ logging.basicConfig(level=LOG_LEVEL)
 logging.getLogger().setLevel(LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
-BASE_URL = os.environ["BASE_URL"]  # 例: https://mcp.example.com
+BASE_URL = os.environ["BASE_URL"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 
