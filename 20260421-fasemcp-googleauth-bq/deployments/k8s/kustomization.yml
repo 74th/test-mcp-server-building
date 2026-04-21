@@ -1,0 +1,11 @@
+namespace: testmcp
+resources:
+  - ./deployment.yml
+  - ./service.yml
+secretGenerator:
+- name: sa-key
+  files:
+  - sa-key/sa-key.json
+- name: testmcp-env
+  envs:
+  - .env

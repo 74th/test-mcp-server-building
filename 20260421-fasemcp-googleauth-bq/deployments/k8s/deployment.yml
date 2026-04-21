@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: testmcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: testmcp
+  template:
+    metadata:
+      labels:
+        app: testmcp
+    spec:
+      containers:
+        - name: testmcp
+          image: gcr.io/nnyn-dev/testmcp:latest
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /app/credentials/sa-key.json
+          envFrom:
+            - secretRef:
+                name: testmcp-env
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - mountPath: /app/credentials
+              name: sa-key
+      volumes:
+        - name: sa-key
+          secret:
+            secretName: sa-key
