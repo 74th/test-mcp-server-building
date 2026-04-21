@@ -1,15 +1,15 @@
 import csv
+import json
 import logging
 import os
+from datetime import datetime, timezone
 from io import StringIO
-from typing import Any, cast
+from typing import Any
+from urllib import error, request
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.server.dependencies import get_access_token
-from google.cloud import bigquery
-from google.cloud.bigquery.table import Row
-from google.oauth2.credentials import Credentials
 
 LOG_LEVEL_NAME = os.environ.get("LOG_LEVEL", "INFO").upper()
 LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
@@ -88,17 +88,87 @@ def get_authenticated_identity(access_token: Any) -> tuple[str, str | None]:
     return email or subject, name
 
 
-def build_bigquery_client(access_token: Any) -> bigquery.Client:
-    credentials = Credentials(token=access_token.token, scopes=[BIGQUERY_SCOPE])
-    return bigquery.Client(project=BIGQUERY_PROJECT, credentials=credentials)
+def execute_bigquery_jobs_query(access_token: Any, query_text: str) -> dict[str, Any]:
+    payload = json.dumps(
+        {
+            "query": query_text,
+            "useLegacySql": False,
+            "timeoutMs": 30000,
+        }
+    ).encode("utf-8")
+    http_request = request.Request(
+        url=f"https://bigquery.googleapis.com/bigquery/v2/projects/{BIGQUERY_PROJECT}/queries",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {access_token.token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    with request.urlopen(http_request) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
-def format_rows_as_csv(rows: list[Row]) -> str:
+def stringify_bigquery_value(field: dict[str, Any], value: Any) -> str:
+    if value is None:
+        return ""
+
+    field_type = field.get("type")
+    field_mode = field.get("mode")
+
+    if field_mode == "REPEATED":
+        repeated_values = [
+            stringify_bigquery_value({**field, "mode": "NULLABLE"}, item.get("v"))
+            for item in value
+        ]
+        return json.dumps(repeated_values, ensure_ascii=False)
+
+    if field_type == "RECORD":
+        nested_fields = field.get("fields") or []
+        nested_values = value.get("f") or []
+        record = {
+            nested_field.get("name") or str(index): stringify_bigquery_value(
+                nested_field,
+                nested_value.get("v"),
+            )
+            for index, (nested_field, nested_value) in enumerate(
+                zip(nested_fields, nested_values, strict=False)
+            )
+        }
+        return json.dumps(record, ensure_ascii=False)
+
+    if field_type == "TIMESTAMP":
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        except (TypeError, ValueError):
+            return str(value)
+
+    if field_type == "BOOL":
+        return str(value).lower()
+
+    return str(value)
+
+
+def format_jobs_query_result_as_csv(result: dict[str, Any]) -> str:
+    schema_fields = result.get("schema", {}).get("fields") or []
+    rows = result.get("rows") or []
+
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["timestamp", "co2_mhz19c"])
+
+    if not schema_fields:
+        return output.getvalue()
+
+    writer.writerow([field.get("name") or "column" for field in schema_fields])
     for row in rows:
-        writer.writerow([row["timestamp"].isoformat(), row["co2_mhz19c"]])
+        fields = row.get("f") or []
+        writer.writerow(
+            [
+                stringify_bigquery_value(field, cell.get("v"))
+                for field, cell in zip(schema_fields, fields, strict=False)
+            ]
+        )
     return output.getvalue()
 
 
@@ -123,19 +193,34 @@ def query() -> str:
     identity, name = get_authenticated_identity(access_token)
 
     try:
-        client = build_bigquery_client(access_token)
-        rows = cast(list[Row], list(client.query(BIGQUERY_QUERY).result()))
+        result = execute_bigquery_jobs_query(access_token, BIGQUERY_QUERY)
+    except error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        logger.exception(
+            "BigQuery jobs.query failed for %s: %s",
+            identity,
+            error_body,
+        )
+        return "bigquery query failed"
     except Exception:
         logger.exception("BigQuery query failed for %s", identity)
+        return "bigquery query failed"
+
+    if not result.get("jobComplete", True):
+        logger.warning("BigQuery jobs.query did not complete in time for %s", identity)
+        return "bigquery query did not complete"
+
+    if result.get("errors"):
+        logger.error("BigQuery jobs.query returned errors for %s: %s", identity, result["errors"])
         return "bigquery query failed"
 
     logger.info(
         "BigQuery query succeeded for %s (%s): %d rows",
         identity,
         name or "unknown",
-        len(rows),
+        len(result.get("rows") or []),
     )
-    return format_rows_as_csv(rows)
+    return format_jobs_query_result_as_csv(result)
 
 
 if __name__ == "__main__":
