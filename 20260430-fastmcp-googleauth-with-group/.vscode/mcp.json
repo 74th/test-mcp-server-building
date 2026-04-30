@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "testmcp": {
+        "url": "https://testmcp.74th.tech/mcp",
+        "headers": {}
+    }
+  }
+}

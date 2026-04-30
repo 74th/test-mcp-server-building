@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: testmcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: testmcp
+  template:
+    metadata:
+      labels:
+        app: testmcp
+    spec:
+      containers:
+        - name: testmcp
+          image: gcr.io/nnyn-dev/testmcp:latest
+          envFrom:
+            - secretRef:
+                name: testmcp-env
+          ports:
+            - containerPort: 8000
